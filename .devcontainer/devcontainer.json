@@ -6,7 +6,7 @@
   "workspaceMount": "type=bind,source=${localWorkspaceFolder},target=/workspace/enem",
   "workspaceFolder": "/workspace/enem",
   "mounts": [
-    "type=volume,source=enem_vscode-server,target=/home/user/.vscode-server",
+    "type=volume,source=enem_vscode-server-extensions,target=/home/user/.vscode-server/extensions",
     "type=volume,source=home-cache,target=/home/user/.cache"
   ],
   "postCreateCommand": "make env",
@@ -14,7 +14,6 @@
     "vscode": {
       "extensions": [
         "ms-python.python",
-        "VisualStudioExptTeam.vscodeintellicode",
         "GitHub.vscode-pull-request-github",
         "github.vscode-github-actions",
         "eamodio.gitlens",
