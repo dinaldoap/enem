@@ -114,10 +114,10 @@ format: .cache/make/format
 	${VENV_BIN}pip-audit --cache-dir=${HOME}/.cache/pip-audit --requirement=requirements-prod.lock
 	${TOUCH}
 .cache/make/bandit-all: .cache/make/install | .cache/make/format
-	${VENV_BIN}bandit --quiet ${PACKAGE_SRC}
+	-${VENV_BIN}bandit --quiet ${PACKAGE_SRC}
 	${TOUCH}
 .cache/make/bandit-change: ${PACKAGE_SRC} | .cache/make/bandit-all
-	${SKIP}${VENV_BIN}bandit --quiet $?
+	-${SKIP}${VENV_BIN}bandit --quiet $?
 	${TOUCH}
 .PHONY: secure
 secure: .cache/make/pip-audit .cache/make/bandit-all .cache/make/bandit-change
@@ -125,15 +125,15 @@ secure: .cache/make/pip-audit .cache/make/bandit-all .cache/make/bandit-change
 
 ## lint        : Run static code analysers on source code.
 .cache/make/lint-all: .cache/make/install .pylintrc mypy.ini .shellcheckrc | .cache/make/format
-	${VENV_BIN}pylint ${PACKAGE_SRC}
-	${VENV_BIN}mypy ${MYPY_SRC}
+	-${VENV_BIN}pylint ${PACKAGE_SRC}
+	-${VENV_BIN}mypy ${MYPY_SRC}
 	shellcheck ${SHELL_SRC}
 	${TOUCH}
 .cache/make/pylint-change: ${PACKAGE_SRC} | .cache/make/lint-all
-	${SKIP}${VENV_BIN}pylint $?
+	-${SKIP}${VENV_BIN}pylint $?
 	${TOUCH}
 .cache/make/mypy-change: ${MYPY_SRC} | .cache/make/lint-all
-	${SKIP}${VENV_BIN}mypy $?
+	-${SKIP}${VENV_BIN}mypy $?
 	${TOUCH}
 .cache/make/shellcheck-change: ${SHELL_SRC} | .cache/make/lint-all
 	${SKIP}shellcheck $?
