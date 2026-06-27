@@ -53,8 +53,8 @@ RUN groupadd --gid $USER_GID $USERNAME && \
 ENV HOME /home/$USERNAME
 
 # Config VS Code server directory for rootless user mount
-RUN mkdir "${HOME}/.vscode-server" && \
-  chown -R ${USERNAME}:${USERNAME} "${HOME}/.vscode-server"
+RUN mkdir --parents "${HOME}/.vscode-server/extensions" && \
+  chown --recursive ${USERNAME}:${USERNAME} "${HOME}/.vscode-server"
 
 # Config cache directory for rootless user
 RUN mkdir --parents "${HOME}/.cache" && \
