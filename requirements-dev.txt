@@ -1,0 +1,20 @@
+# Dependencies for development
+pyupgrade
+isort
+black
+docformatter
+flake8-bandit
+bandit
+pip-audit
+pylint
+mypy
+pytest
+pytest-cov
+pytest-env
+uv
+gha-update
+pre-commit
+build
+twine
+cookiecutter
+cookiecutter-python-vscode-github

@@ -1,0 +1,10 @@
+default_context:
+  full_name: "Dinaldo A. Pessoa"
+  email: "dinaldoap@gmail.com"
+  github_username: "dinaldoap"
+  project_name: "ENEM"
+  project_slug: "enem"
+  project_slug_underscore: "enem"
+  project_slug_pypi: "enem"
+  project_slug_entrypoint: "enem"
+  project_short_description: "Statistical School Ranking"

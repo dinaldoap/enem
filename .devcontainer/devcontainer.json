@@ -1,0 +1,93 @@
+{
+  "name": "enem",
+  // Use docker while docker-compose doesn't support --gpus
+  "dockerFile": "devcontainer.dockerfile",
+  "context": "..",
+  "workspaceMount": "type=bind,source=${localWorkspaceFolder},target=/workspace/enem",
+  "workspaceFolder": "/workspace/enem",
+  "mounts": [
+    "type=volume,source=enem_vscode-server,target=/home/user/.vscode-server",
+    "type=volume,source=home-cache,target=/home/user/.cache"
+  ],
+  "postCreateCommand": "make env",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "VisualStudioExptTeam.vscodeintellicode",
+        "GitHub.vscode-pull-request-github",
+        "github.vscode-github-actions",
+        "eamodio.gitlens",
+        "mhutchie.git-graph",
+        "njpwerner.autodocstring",
+        "esbenp.prettier-vscode",
+        "ms-python.isort",
+        "ms-python.black-formatter",
+        "ms-python.pylint",
+        "ms-python.flake8",
+        "ms-python.mypy-type-checker",
+        "timonwong.shellcheck"
+      ],
+      "settings": {
+        // Save
+        "files.autoSave": "afterDelay",
+        // Format
+        "editor.formatOnSave": true,
+        "editor.detectIndentation": false,
+        "editor.tabSize": 4,
+        "editor.insertSpaces": true,
+        "editor.codeActionsOnSave": [
+          "source.format",
+          "source.organizeImports",
+          "source.fixAll"
+        ],
+        "[python]": {
+          "editor.defaultFormatter": "ms-python.black-formatter"
+        },
+        "python.formatting.provider": "none",
+        "black-formatter.importStrategy": "fromEnvironment",
+        "isort.importStrategy": "fromEnvironment",
+        "isort.args": ["--profile", "black"],
+        // Ignore files
+        "files.exclude": {
+          "**/.git": true,
+          "**/.venv": true,
+          "**/enem.egg-info": true,
+          "**/__pycache__": true,
+          "**/.ipynb_checkpoints": true,
+          "**/activate": true,
+          "**/.coverage": true,
+          "**/enem.spec": true
+        },
+        // Ignore for watching
+        "files.watcherExclude": {
+          "**/.git/**": true,
+          "**/.venv/**": true,
+          "**/enem.egg-info/**": true,
+          "**/__pycache__/**": true,
+          "**/.ipynb_checkpoints/**": true,
+          "**/data/**": true
+        },
+        // Python
+        "python.defaultInterpreterPath": "/workspace/enem/.venv/bin/python",
+        "python.terminal.activateEnvironment": false,
+        // pytest
+        "python.testing.pytestArgs": ["tests"],
+        "python.testing.unittestEnabled": false,
+        "python.testing.nosetestsEnabled": false,
+        "python.testing.pytestEnabled": true,
+        // Flake8 (used to run Bandit)
+        "flake8.importStrategy": "fromEnvironment",
+        "flake8.args": ["--select=S", "--exclude=tests/*"],
+        // Pylint
+        "pylint.importStrategy": "fromEnvironment",
+        // Mypy
+        "mypy-type-checker.importStrategy": "fromEnvironment",
+        // Shellcheck
+        "shellcheck.useWorkspaceRootAsCwd": true,
+        // GitHub
+        "githubPullRequests.defaultMergeMethod": "squash"
+      }
+    }
+  }
+}
