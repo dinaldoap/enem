@@ -130,47 +130,25 @@ def download_dataset(
     return target_archive
 
 
-def extract_archive(archive_path: Path, output_dir: str | Path) -> Path:
-    """Extract the first CSV-like file from the archive and return its path."""
-    extract_dir = Path(output_dir)
-    extract_dir.mkdir(parents=True, exist_ok=True)
+def _read_text_file(path: Path) -> str:
+    """Read a file using common encodings and a replacement fallback."""
+    raw_bytes = path.read_bytes()
 
-    with zipfile.ZipFile(archive_path) as archive:
-        archive.extractall(extract_dir)
-
-    for candidate in sorted(extract_dir.rglob("*")):
-        if candidate.is_file() and candidate.suffix.lower() in {".csv", ".txt", ".tsv"}:
-            return candidate
-
-    raise FileNotFoundError(
-        "No supported data file was found in the extracted archive."
-    )
-
-
-def load_recife_schools(csv_path: str | Path) -> pd.DataFrame:
-    """Load RESULTADOS_2025.csv and filter for Recife, Pernambuco schools.
-
-    Returns a DataFrame with students from schools located in Recife,
-    PE. Returns a DataFrame with students from schools located in
-    Recife, PE. Returns empty DataFrame if required columns are not
-    present.
-    """
-    data_path = Path(csv_path)
-
-    # Read CSV with robust encoding handling
-    raw_bytes = data_path.read_bytes()
-    text = None
     for encoding in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
         try:
-            text = raw_bytes.decode(encoding)
-            break
+            return raw_bytes.decode(encoding)
         except UnicodeDecodeError:
             continue
 
-    if text is None:
-        text = raw_bytes.decode("utf-8", errors="replace")
+    return raw_bytes.decode("utf-8", errors="replace")
 
-    # Detect delimiter and read into pandas
+
+def _file_has_results_columns(path: Path) -> bool:
+    """Return True when a CSV-like file contains the ENEM results columns."""
+    text = _read_text_file(path)
+    if not text:
+        return False
+
     sample = text[:4096]
     try:
         dialect = csv.Sniffer().sniff(sample, delimiters=";,")
@@ -178,13 +156,16 @@ def load_recife_schools(csv_path: str | Path) -> pd.DataFrame:
     except csv.Error:
         delimiter = ","
 
-    df = pd.read_csv(
-        io.StringIO(text),
-        delimiter=delimiter,
-        dtype={"CO_ESCOLA": str, "CO_MUNICIPIO_ESC": str},
-    )
+    handle = io.StringIO(text, newline="")
+    try:
+        rows = list(csv.reader(handle, delimiter=delimiter))
+    except csv.Error:
+        return False
 
-    # Check if required columns exist (only for actual ENEM data)
+    if not rows:
+        return False
+
+    header = [cell.strip() for cell in rows[0]]
     required_columns = {
         "SG_UF_ESC",
         "NO_MUNICIPIO_ESC",
@@ -194,16 +175,135 @@ def load_recife_schools(csv_path: str | Path) -> pd.DataFrame:
         "NU_NOTA_MT",
         "NU_NOTA_REDACAO",
     }
-    if not required_columns.issubset(df.columns):
-        return pd.DataFrame()  # Return empty DataFrame if not ENEM data
+    return required_columns.issubset(set(header))
 
-    # Filter for Recife, Pernambuco schools
-    recife_df = df[
-        (df["SG_UF_ESC"] == "PE")
-        & (df["NO_MUNICIPIO_ESC"].str.strip().str.upper() == "RECIFE")
-    ].copy()
 
-    return recife_df
+def extract_archive(archive_path: Path, output_dir: str | Path) -> Path:
+    """Extract the archive and return the ENEM results CSV when present."""
+    extract_dir = Path(output_dir)
+    extract_dir.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(archive_path) as archive:
+        archive.extractall(extract_dir)
+
+    candidates = [
+        candidate
+        for candidate in sorted(extract_dir.rglob("*"))
+        if candidate.is_file() and candidate.suffix.lower() in {".csv", ".txt", ".tsv"}
+    ]
+
+    for candidate in candidates:
+        if _file_has_results_columns(candidate):
+            return candidate
+
+    if candidates:
+        return candidates[0]
+
+    raise FileNotFoundError(
+        "No supported data file was found in the extracted archive."
+    )
+
+
+def load_recife_schools(csv_path: str | Path) -> pd.DataFrame:
+    """Load RESULTADOS_2025.csv and filter for Recife, Pernambuco schools.
+
+    Uses chunked reading to minimize memory usage by filtering rows
+    immediately. Returns a DataFrame with students from schools located 
+    in Recife, PE. Returns empty DataFrame if required columns are not present.
+    """
+    data_path = Path(csv_path)
+
+    # Detect delimiter from file sample
+    delimiter = ","
+    try:
+        with open(data_path, "r", encoding="utf-8-sig", errors="replace") as f:
+            sample = f.read(4096)
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=";,")
+            delimiter = dialect.delimiter
+        except csv.Error:
+            delimiter = ","
+    except Exception:
+        delimiter = ","
+
+    # Define required columns
+    required_columns = {
+        "SG_UF_ESC",
+        "NO_MUNICIPIO_ESC",
+        "NU_NOTA_CN",
+        "NU_NOTA_CH",
+        "NU_NOTA_LC",
+        "NU_NOTA_MT",
+        "NU_NOTA_REDACAO",
+    }
+
+    # Read CSV in chunks to minimize memory usage
+    chunks = []
+    chunk_count = 0
+
+    try:
+        for chunk in pd.read_csv(
+            data_path,
+            sep=delimiter,
+            dtype={"CO_ESCOLA": str, "CO_MUNICIPIO_ESC": str},
+            chunksize=50000,  # Process 50k rows at a time
+            encoding="utf-8-sig",
+            on_bad_lines="skip",
+        ):
+            chunk_count += 1
+
+            # Check if required columns exist (only on first chunk)
+            if chunk_count == 1 and not required_columns.issubset(chunk.columns):
+                return pd.DataFrame()  # Return empty DataFrame if not ENEM data
+
+            # Filter for Recife, Pernambuco schools immediately to save memory
+            recife_chunk = chunk[
+                (chunk["SG_UF_ESC"] == "PE")
+                & (chunk["NO_MUNICIPIO_ESC"].str.strip().str.upper() == "RECIFE")
+            ]
+
+            if len(recife_chunk) > 0:
+                chunks.append(recife_chunk)
+
+        if not chunks:
+            return pd.DataFrame()
+
+        return pd.concat(chunks, ignore_index=True)
+
+    except Exception:
+        # Fallback: try with different encoding if utf-8-sig fails
+        chunks = []
+        chunk_count = 0
+
+        try:
+            for chunk in pd.read_csv(
+                data_path,
+                sep=delimiter,
+                dtype={"CO_ESCOLA": str, "CO_MUNICIPIO_ESC": str},
+                chunksize=50000,
+                encoding="latin-1",
+                on_bad_lines="skip",
+            ):
+                chunk_count += 1
+
+                if chunk_count == 1 and not required_columns.issubset(chunk.columns):
+                    return pd.DataFrame()
+
+                recife_chunk = chunk[
+                    (chunk["SG_UF_ESC"] == "PE")
+                    & (chunk["NO_MUNICIPIO_ESC"].str.strip().str.upper() == "RECIFE")
+                ]
+
+                if len(recife_chunk) > 0:
+                    chunks.append(recife_chunk)
+
+            if not chunks:
+                return pd.DataFrame()
+
+            return pd.concat(chunks, ignore_index=True)
+
+        except Exception:
+            return pd.DataFrame()
 
 
 def calculate_overall_scores(df: pd.DataFrame) -> pd.DataFrame:
@@ -326,30 +426,27 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
     # Sort by rank for display (best schools at top)
     plot_df = rankings_df.sort_values("RANK").reset_index(drop=True)
 
-    means = plot_df["MEAN_SCORE"].values
-    ci_lowers = plot_df["CI_LOWER"].values
-    ci_uppers = plot_df["CI_UPPER"].values
-    errors = [means - ci_lowers, ci_uppers - means]
+    for index, row in plot_df.iterrows():
+        mean_score = row["MEAN_SCORE"]
+        y_value = y_pos[index]
+        lower_error = mean_score - row["CI_LOWER"]
+        upper_error = row["CI_UPPER"] - mean_score
+        color = "#ff7f0e" if row["HAS_OVERLAP"] else "#1f77b4"
 
-    # Color schools with overlapping CIs differently
-    colors = [
-        "#ff7f0e" if has_overlap else "#1f77b4"
-        for has_overlap in plot_df["HAS_OVERLAP"].values
-    ]
-
-    plt.errorbar(
-        means,
-        y_pos,
-        xerr=errors,
-        fmt="o",
-        capsize=5,
-        capthick=2,
-        ecolor=colors,
-        mfc=colors,
-        mec=colors,
-        markersize=8,
-        alpha=0.8,
-    )
+        plt.errorbar(
+            [mean_score],
+            [y_value],
+            xerr=[[lower_error], [upper_error]],
+            fmt="o",
+            capsize=5,
+            capthick=2,
+            ecolor=color,
+            color=color,
+            mfc=color,
+            mec=color,
+            markersize=8,
+            alpha=0.8,
+        )
 
     # Labels and formatting
     school_labels = [
@@ -371,18 +468,23 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
     # Bar chart with error bars
     plt.figure(figsize=(12, max(8, len(rankings_df) * 0.25)))
     y_pos = np.arange(len(plot_df))
-    ci_widths = plot_df["CI_UPPER"].values - plot_df["CI_LOWER"].values
 
-    bars = plt.barh(
-        y_pos,
-        means,
-        xerr=errors,
-        capsize=5,
-        color=colors,
-        alpha=0.7,
-        edgecolor="black",
-        linewidth=0.5,
-    )
+    for index, row in plot_df.iterrows():
+        mean_score = row["MEAN_SCORE"]
+        lower_error = mean_score - row["CI_LOWER"]
+        upper_error = row["CI_UPPER"] - mean_score
+        color = "#ff7f0e" if row["HAS_OVERLAP"] else "#1f77b4"
+
+        plt.barh(
+            [y_pos[index]],
+            [mean_score],
+            xerr=[[lower_error], [upper_error]],
+            capsize=5,
+            color=color,
+            alpha=0.7,
+            edgecolor="black",
+            linewidth=0.5,
+        )
 
     plt.yticks(y_pos, school_labels, fontsize=9)
     plt.xlabel("Overall Score (Mean ± 95% CI)", fontsize=11)
