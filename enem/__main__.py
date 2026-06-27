@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import shutil
 import sys
 import tempfile
+import traceback
 import zipfile
+from collections.abc import Sequence
 from functools import lru_cache
 from pathlib import Path
-from typing import Sequence
 from urllib.parse import urlparse
 from urllib.request import urlopen
 
@@ -60,7 +62,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 @lru_cache(maxsize=8)
 def _download_to_cache(url: str, cache_dir: str) -> Path:
-    """Download the dataset into a cache directory and return the cached archive path."""
+    """Download the dataset into a cache directory and return the cached
+    archive path."""
     cache_path = Path(cache_dir)
     cache_path.mkdir(parents=True, exist_ok=True)
 
@@ -94,7 +97,8 @@ def download_dataset(
     cache_dir: str | Path | None = None,
     force_download: bool = False,
 ) -> Path:
-    """Download the archive to the cache and copy it to the requested output directory."""
+    """Download the archive to the cache and copy it to the requested output
+    directory."""
     output_path = Path(output_dir or "data")
     output_path.mkdir(parents=True, exist_ok=True)
 
@@ -128,22 +132,40 @@ def extract_archive(archive_path: Path, output_dir: str | Path) -> Path:
     )
 
 
+def _read_csv_rows(csv_path: str | Path) -> list[list[str]]:
+    """Read a CSV file using a robust decoding fallback for common
+    encodings."""
+    data_path = Path(csv_path)
+    raw_bytes = data_path.read_bytes()
+
+    for encoding in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
+        try:
+            text = raw_bytes.decode(encoding)
+            break
+        except UnicodeDecodeError:
+            continue
+    else:
+        text = raw_bytes.decode("utf-8", errors="replace")
+
+    handle = io.StringIO(text, newline="")
+    sample = text[:4096]
+    handle.seek(0)
+
+    try:
+        dialect = csv.Sniffer().sniff(sample, delimiters=";,")
+        reader = csv.reader(handle, dialect=dialect)
+    except csv.Error:
+        reader = csv.reader(handle, delimiter=",")
+
+    return [row for row in reader if row]
+
+
 def generate_eda_report(
     csv_path: str | Path, output_path: str | Path | None = None
 ) -> str:
-    """Generate a simple text-based exploratory data analysis report from a CSV file."""
-    data_path = Path(csv_path)
-    with data_path.open("r", encoding="utf-8-sig", newline="") as handle:
-        sample = handle.read(4096)
-        handle.seek(0)
-
-        try:
-            dialect = csv.Sniffer().sniff(sample, delimiters=";,")
-            reader = csv.reader(handle, dialect=dialect)
-        except csv.Error:
-            reader = csv.reader(handle, delimiter=",")
-
-        rows = [row for row in reader if row]
+    """Generate a simple text-based exploratory data analysis report from a CSV
+    file."""
+    rows = _read_csv_rows(csv_path)
 
     if not rows:
         raise ValueError("The input file does not contain any rows.")
@@ -190,6 +212,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         generate_eda_report(data_path, args.report)
     except Exception as exc:  # pragma: no cover - defensive CLI handling
         print(f"Unable to generate EDA report: {exc}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
         return 1
 
     print(f"Report written to {args.report}")

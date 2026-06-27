@@ -35,3 +35,34 @@ def test_main_generates_report_from_zip(tmp_path):
     assert "Rows: 2" in report_text
     assert "Columns: 3" in report_text
     assert "nota" in report_text
+
+
+def test_main_generates_report_from_latin1_csv(tmp_path):
+    csv_path = tmp_path / "sample_latin1.csv"
+    csv_path.write_text("nome,idade\nJosé,20\nAna,19\n", encoding="latin-1")
+
+    archive_path = tmp_path / "sample_latin1.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.write(csv_path, arcname="sample_latin1.csv")
+
+    output_dir = tmp_path / "extracted"
+    report_path = tmp_path / "report_latin1.txt"
+
+    result = main(
+        [
+            "--source",
+            str(archive_path),
+            "--output-dir",
+            str(output_dir),
+            "--report",
+            str(report_path),
+        ]
+    )
+
+    assert result == 0
+    assert report_path.exists()
+
+    report_text = report_path.read_text(encoding="utf-8")
+    assert "EDA Report" in report_text
+    assert "Rows: 2" in report_text
+    assert "José" in report_text or "nome" in report_text
