@@ -144,46 +144,9 @@ def _read_text_file(path: Path) -> str:
     return raw_bytes.decode("utf-8", errors="replace")
 
 
-def _file_has_results_columns(path: Path) -> bool:
-    """Return True when a CSV-like file contains the ENEM results columns."""
-    text = _read_text_file(path)
-    if not text:
-        return False
-
-    sample = text[:4096]
-    try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=";,")
-        delimiter = dialect.delimiter
-    except csv.Error:
-        delimiter = ","
-
-    handle = io.StringIO(text, newline="")
-    try:
-        rows = list(csv.reader(handle, delimiter=delimiter))
-    except csv.Error:
-        return False
-
-    if not rows:
-        return False
-
-    header = [cell.strip() for cell in rows[0]]
-    required_columns = {
-        "SG_UF_ESC",
-        "NO_MUNICIPIO_ESC",
-        "NU_NOTA_CN",
-        "NU_NOTA_CH",
-        "NU_NOTA_LC",
-        "NU_NOTA_MT",
-        "NU_NOTA_REDACAO",
-    }
-    return required_columns.issubset(set(header))
-
-
+@lru_cache(maxsize=8)
 def extract_archive(archive_path: Path, output_dir: str | Path) -> Path:
     """Extract the archive and return the ENEM results CSV when present."""
-    resultados_path = Path("data/DADOS/RESULTADOS_2025.csv")
-    if resultados_path.exists():
-        return resultados_path
     extract_dir = Path(output_dir)
     extract_dir.mkdir(parents=True, exist_ok=True)
 
@@ -249,6 +212,26 @@ def load_recife_schools(csv_path: str | Path) -> pd.DataFrame:
     return df_recife.to_pandas()
 
 
+def load_schools_metadata(csv_path: str | Path) -> pd.DataFrame:
+    """Load escolas.csv to get school names."""
+    schools_path = Path(csv_path)
+
+    # Assuming delimiter is ';' and encoding is 'latin-1' or 'utf-8'
+    try:
+        schools_df = pd.read_csv(
+            schools_path, sep=",", encoding="latin-1", dtype={"Codigo INEP": str}
+        )
+    except UnicodeDecodeError:
+        print("AQUIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII")
+        schools_df = pd.read_csv(schools_path, sep=",", encoding="utf-8")
+
+    # Ensure required columns exist and rename them
+    required_cols_map = {"Codigo INEP": "CO_ESCOLA", "Escola": "NO_ESCOLA"}
+
+    schools_df = schools_df.rename(columns=required_cols_map)
+    return schools_df[["CO_ESCOLA", "NO_ESCOLA"]].copy()
+
+
 def calculate_overall_scores(df: pd.DataFrame) -> pd.DataFrame:
     """Calculate per-student overall score as mean of 5 subjects.
 
@@ -285,7 +268,7 @@ def compute_school_rankings(df: pd.DataFrame, min_students: int = 10) -> pd.Data
     """
     school_stats = []
 
-    for school_code, group in df.groupby("CO_ESCOLA"):
+    for school_code, group in df.groupby(["CO_ESCOLA", "NO_ESCOLA"]):
         scores = group["OVERALL_SCORE"].values
         n_students = len(scores)
 
@@ -304,7 +287,8 @@ def compute_school_rankings(df: pd.DataFrame, min_students: int = 10) -> pd.Data
 
         school_stats.append(
             {
-                "SCHOOL_CODE": school_code,
+                "CO_ESCOLA": school_code[0],
+                "NO_ESCOLA": school_code[1],
                 "N_STUDENTS": n_students,
                 "MEAN_SCORE": mean_score,
                 "STD_DEV": std_dev,
@@ -321,7 +305,7 @@ def compute_school_rankings(df: pd.DataFrame, min_students: int = 10) -> pd.Data
         return rankings_df
 
     # Sort by mean score (descending) and add rank
-    rankings_df = rankings_df.sort_values("MEAN_SCORE", ascending=False).reset_index(
+    rankings_df = rankings_df.sort_values("MEAN_SCORE", ascending=True).reset_index(
         drop=True
     )
     rankings_df["RANK"] = range(1, len(rankings_df) + 1)
@@ -387,7 +371,7 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
 
     # Labels and formatting
     school_labels = [
-        f"{row['RANK']}. {row['SCHOOL_CODE'][:40]}" for _, row in plot_df.iterrows()
+        f"{row['RANK']}. {row['NO_ESCOLA'][:40]}" for _, row in plot_df.iterrows()
     ]
     plt.yticks(y_pos, school_labels, fontsize=9)
     plt.xlabel("Overall Score (Mean ± 95% CI)", fontsize=11)
@@ -523,7 +507,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         # School ranking analysis for Recife
         if not args.skip_school_ranking:
             print("Analyzing Recife schools...", file=sys.stderr)
-            print(data_path)
             recife_df = load_recife_schools(data_path)
             print(
                 f"Loaded {len(recife_df)} student records from Recife schools",
@@ -532,10 +515,23 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             if len(recife_df) > 0:
                 recife_df = calculate_overall_scores(recife_df)
-                rankings_df = compute_school_rankings(recife_df, min_students=2)
 
+                # Load schools metadata and join
+                escolas_path = Path(args.output_dir) / "escolas.csv"
+                schools_metadata_df = load_schools_metadata(escolas_path)
+
+                recife_df = recife_df.merge(
+                    schools_metadata_df,
+                    left_on="CO_ESCOLA",
+                    right_on="CO_ESCOLA",
+                    how="left",
+                )
+                # Fill any missing school names if a school in ENEM data is not in escolas.csv
+                recife_df["NO_ESCOLA"] = recife_df["NO_ESCOLA"].fillna("Desconhecida")
+
+                rankings_df = compute_school_rankings(recife_df, min_students=10)
                 print(
-                    f"Ranked {len(rankings_df)} schools (with >=2 students)",
+                    f"Ranked {len(rankings_df)} schools (with >=10 students)",
                     file=sys.stderr,
                 )
 
