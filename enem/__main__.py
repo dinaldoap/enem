@@ -44,11 +44,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory where the extracted files should be written.",
     )
     parser.add_argument(
-        "--report",
-        default="eda_report.txt",
-        help="Path to the generated EDA report.",
-    )
-    parser.add_argument(
         "--cache-dir",
         default=None,
         help="Directory used for the download cache.",
@@ -217,13 +212,9 @@ def load_schools_metadata(csv_path: str | Path) -> pd.DataFrame:
     schools_path = Path(csv_path)
 
     # Assuming delimiter is ';' and encoding is 'latin-1' or 'utf-8'
-    try:
-        schools_df = pd.read_csv(
-            schools_path, sep=",", encoding="latin-1", dtype={"Codigo INEP": str}
-        )
-    except UnicodeDecodeError:
-        print("AQUIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIIII")
-        schools_df = pd.read_csv(schools_path, sep=",", encoding="utf-8")
+    schools_df = pd.read_csv(
+        schools_path, sep=",", encoding="latin-1", dtype={"Codigo INEP": str}
+    )
 
     # Ensure required columns exist and rename them
     required_cols_map = {"Codigo INEP": "CO_ESCOLA", "Escola": "NO_ESCOLA"}
@@ -305,7 +296,7 @@ def compute_school_rankings(df: pd.DataFrame, min_students: int = 10) -> pd.Data
         return rankings_df
 
     # Sort by mean score (descending) and add rank
-    rankings_df = rankings_df.sort_values("MEAN_SCORE", ascending=True).reset_index(
+    rankings_df = rankings_df.sort_values("MEAN_SCORE", ascending=False).reset_index(
         drop=True
     )
     rankings_df["RANK"] = range(1, len(rankings_df) + 1)
@@ -345,7 +336,7 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
     y_pos = np.arange(len(rankings_df))
 
     # Sort by rank for display (best schools at top)
-    plot_df = rankings_df.sort_values("RANK").reset_index(drop=True)
+    plot_df = rankings_df.sort_values("RANK", ascending=False).reset_index(drop=True)
 
     for index, row in plot_df.iterrows():
         mean_score = row["MEAN_SCORE"]
@@ -453,42 +444,6 @@ def _read_csv_rows(csv_path: str | Path) -> list[list[str]]:
     return [row for row in reader if row]
 
 
-def generate_eda_report(
-    csv_path: str | Path, output_path: str | Path | None = None
-) -> str:
-    """Generate a simple text-based exploratory data analysis report from a CSV
-    file."""
-    rows = _read_csv_rows(csv_path)
-
-    if not rows:
-        raise ValueError("The input file does not contain any rows.")
-
-    header = rows[0]
-    data_rows = rows[1:]
-
-    lines = [
-        "EDA Report",
-        f"Rows: {len(data_rows)}",
-        f"Columns: {len(header)}",
-        "Column summary:",
-    ]
-
-    for index, column_name in enumerate(header):
-        values = [row[index] if index < len(row) else "" for row in data_rows]
-        non_empty = [value for value in values if str(value).strip()]
-        missing = len(values) - len(non_empty)
-        lines.append(f"- {column_name}: missing={missing}, non-empty={len(non_empty)}")
-
-    report_text = "\n".join(lines) + "\n"
-
-    if output_path is not None:
-        report_file = Path(output_path)
-        report_file.parent.mkdir(parents=True, exist_ok=True)
-        report_file.write_text(report_text, encoding="utf-8")
-
-    return report_text
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint."""
     parser = build_parser()
@@ -502,7 +457,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             force_download=args.force_download,
         )
         data_path = extract_archive(archive_path, args.output_dir)
-        # generate_eda_report(data_path, args.report)
 
         # School ranking analysis for Recife
         if not args.skip_school_ranking:
@@ -529,7 +483,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 # Fill any missing school names if a school in ENEM data is not in escolas.csv
                 recife_df["NO_ESCOLA"] = recife_df["NO_ESCOLA"].fillna("Desconhecida")
 
-                rankings_df = compute_school_rankings(recife_df, min_students=10)
+                rankings_df = compute_school_rankings(recife_df, min_students=10).head(
+                    30
+                )
                 print(
                     f"Ranked {len(rankings_df)} schools (with >=10 students)",
                     file=sys.stderr,
@@ -548,11 +504,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             else:
                 print("No student records found for Recife schools", file=sys.stderr)
     except Exception as exc:  # pragma: no cover - defensive CLI handling
-        print(f"Unable to generate EDA report: {exc}", file=sys.stderr)
         traceback.print_exc(file=sys.stderr)
         return 1
 
-    print(f"Report written to {args.report}")
     return 0
 
 
