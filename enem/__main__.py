@@ -24,7 +24,8 @@ from scipy import stats
 
 from .version import __version__
 
-DEFAULT_URL = "https://download.inep.gov.br/microdados/microdados_enem_2025.zip"
+DATA_DIR = "data/"
+DEFAULT_DATA_PATH = DATA_DIR + "DADOS/RESULTADOS_2025.csv"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,24 +35,9 @@ def build_parser() -> argparse.ArgumentParser:
         description="Download, extract, and analyze ENEM microdata.",
     )
     parser.add_argument(
-        "--source",
-        default=DEFAULT_URL,
-        help="Remote URL or local path to an ENEM ZIP archive.",
-    )
-    parser.add_argument(
-        "--output-dir",
-        default="data",
-        help="Directory where the extracted files should be written.",
-    )
-    parser.add_argument(
-        "--cache-dir",
-        default=None,
-        help="Directory used for the download cache.",
-    )
-    parser.add_argument(
-        "--force-download",
-        action="store_true",
-        help="Re-download the archive instead of using the cache.",
+        "--data-path",
+        default=DEFAULT_DATA_PATH,
+        help="Local path to RESULTADOS_2025.csv.",
     )
     parser.add_argument(
         "--analysis-output",
@@ -69,99 +55,6 @@ def build_parser() -> argparse.ArgumentParser:
         version=f"%(prog)s {__version__}",
     )
     return parser
-
-
-@lru_cache(maxsize=8)
-def _download_to_cache(url: str, cache_dir: str) -> Path:
-    """Download the dataset into a cache directory and return the cached
-    archive path."""
-    cache_path = Path(cache_dir)
-    cache_path.mkdir(parents=True, exist_ok=True)
-
-    archive_name = Path(urlparse(url).path).name or "enem.zip"
-    destination = cache_path / archive_name
-
-    if destination.exists():
-        return destination
-
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as temp_file:
-        temp_path = Path(temp_file.name)
-
-    try:
-        source_path = Path(url).expanduser()
-        if source_path.exists():
-            temp_path.write_bytes(source_path.read_bytes())
-        else:
-            with urlopen(url) as response:
-                temp_path.write_bytes(response.read())
-        shutil.move(str(temp_path), str(destination))
-    finally:
-        if temp_path.exists():
-            temp_path.unlink(missing_ok=True)
-
-    return destination
-
-
-def download_dataset(
-    source: str,
-    output_dir: str | Path | None = None,
-    cache_dir: str | Path | None = None,
-    force_download: bool = False,
-) -> Path:
-    """Download the archive to the cache and copy it to the requested output
-    directory."""
-    output_path = Path(output_dir or "data")
-    output_path.mkdir(parents=True, exist_ok=True)
-
-    cache_root = Path(cache_dir or Path(tempfile.gettempdir()) / "enem-cache")
-    cache_root.mkdir(parents=True, exist_ok=True)
-
-    archive_name = Path(urlparse(source).path).name or "enem.zip"
-    cached_archive = _download_to_cache(source, str(cache_root))
-
-    target_archive = output_path / archive_name
-    if force_download or not target_archive.exists():
-        shutil.copy2(cached_archive, target_archive)
-
-    return target_archive
-
-
-def _read_text_file(path: Path) -> str:
-    """Read a file using common encodings and a replacement fallback."""
-    raw_bytes = path.read_bytes()
-
-    for encoding in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
-        try:
-            return raw_bytes.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-
-    return raw_bytes.decode("utf-8", errors="replace")
-
-
-@lru_cache(maxsize=8)
-def extract_archive(archive_path: Path, output_dir: str | Path) -> Path:
-    """Extract the archive and return the ENEM results CSV when present."""
-    extract_dir = Path(output_dir)
-    extract_dir.mkdir(parents=True, exist_ok=True)
-
-    if not extract_dir.exists():
-        with zipfile.ZipFile(archive_path) as archive:
-            archive.extractall(extract_dir)
-
-    candidates = [
-        candidate
-        for candidate in sorted(extract_dir.rglob("*"))
-        if candidate.is_file() and candidate.suffix.lower() in {".csv", ".txt", ".tsv"}
-    ]
-
-    for candidate in candidates:
-        if str(candidate).endswith("RESULTADOS_2025.csv"):
-            return candidate
-
-    raise FileNotFoundError(
-        "No supported data file was found in the extracted archive."
-    )
 
 
 def load_recife_schools(csv_path: str | Path) -> pd.DataFrame:
@@ -320,7 +213,7 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
     """Generate visualizations for school rankings.
 
     Creates:
-    1. Forest plot (mean ± 95% CI with ranks)
+    1. Forest plot (mean ± 95% CI with ranks and connecting lines)
     2. Bar chart with error bars (mean and CI width)
     3. Statistical summary report
     """
@@ -331,12 +224,28 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
         print("No schools to visualize.", file=sys.stderr)
         return
 
-    # Forest plot
-    plt.figure(figsize=(12, max(8, len(rankings_df) * 0.3)))
-    y_pos = np.arange(len(rankings_df))
-
     # Sort by rank for display (best schools at top)
     plot_df = rankings_df.sort_values("RANK", ascending=False).reset_index(drop=True)
+    school_labels = [
+        f"{row['RANK']}. {row['NO_ESCOLA'][:40]}" for _, row in plot_df.iterrows()
+    ]
+
+    # ==========================================
+    # 1. Forest Plot
+    # ==========================================
+    plt.figure(figsize=(12, max(8, len(rankings_df) * 0.3)))
+    ax = plt.gca()
+    y_pos = np.arange(len(plot_df))
+
+    # Calculate x-axis bounds dynamically to anchor the connecting lines perfectly
+    x_min = plot_df["CI_LOWER"].min()
+    x_max = plot_df["CI_UPPER"].max()
+    padding = (x_max - x_min) * 0.05
+    left_edge = x_min - padding
+    right_edge = x_max + padding
+
+    # Set explicit limits so the hlines touch the y-axis exactly
+    ax.set_xlim(left_edge, right_edge)
 
     for index, row in plot_df.iterrows():
         mean_score = row["MEAN_SCORE"]
@@ -345,6 +254,19 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
         upper_error = row["CI_UPPER"] - mean_score
         color = "#ff7f0e" if row["HAS_OVERLAP"] else "#1f77b4"
 
+        # NEW: Draw horizontal line connecting the y-axis to the CI lower bound
+        plt.hlines(
+            y=y_value,
+            xmin=left_edge,
+            xmax=row["CI_LOWER"],
+            color="gray",
+            linestyle=":",
+            alpha=0.5,
+            linewidth=1.2,
+            zorder=1,  # Keeps the line behind the data points
+        )
+
+        # Plot the data points and error bars
         plt.errorbar(
             [mean_score],
             [y_value],
@@ -358,12 +280,10 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
             mec=color,
             markersize=8,
             alpha=0.8,
+            zorder=2,  # Keeps points in front of the connecting lines
         )
 
     # Labels and formatting
-    school_labels = [
-        f"{row['RANK']}. {row['NO_ESCOLA'][:40]}" for _, row in plot_df.iterrows()
-    ]
     plt.yticks(y_pos, school_labels, fontsize=9)
     plt.xlabel("Overall Score (Mean ± 95% CI)", fontsize=11)
     plt.ylabel("Schools (Ranked by Mean Score)", fontsize=11)
@@ -373,12 +293,20 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
         fontweight="bold",
     )
     plt.grid(axis="x", alpha=0.3)
+    # Remove borders for a cleaner look since we have horizontal guide lines
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+    ax.spines["left"].set_visible(False)
+
     plt.tight_layout()
     plt.savefig(output_path / "forest_plot.png", dpi=300, bbox_inches="tight")
     plt.close()
 
-    # Bar chart with error bars
+    # ==========================================
+    # 2. Bar Chart with error bars
+    # ==========================================
     plt.figure(figsize=(12, max(8, len(rankings_df) * 0.25)))
+    ax = plt.gca()
     y_pos = np.arange(len(plot_df))
 
     for index, row in plot_df.iterrows():
@@ -396,6 +324,7 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
             alpha=0.7,
             edgecolor="black",
             linewidth=0.5,
+            zorder=2,
         )
 
     plt.yticks(y_pos, school_labels, fontsize=9)
@@ -407,6 +336,12 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
         fontweight="bold",
     )
     plt.grid(axis="x", alpha=0.3)
+    # NEW: Add a faint y-axis grid to the bar chart to separate the schools visually
+    plt.grid(axis="y", linestyle="--", alpha=0.2, color="gray", zorder=1)
+
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
     plt.tight_layout()
     plt.savefig(output_path / "bar_chart.png", dpi=300, bbox_inches="tight")
     plt.close()
@@ -416,52 +351,17 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
     print(f"  - bar_chart.png")
 
 
-def _read_csv_rows(csv_path: str | Path) -> list[list[str]]:
-    """Read a CSV file using a robust decoding fallback for common
-    encodings."""
-    data_path = Path(csv_path)
-    raw_bytes = data_path.read_bytes()
-
-    for encoding in ("utf-8-sig", "utf-8", "latin-1", "cp1252"):
-        try:
-            text = raw_bytes.decode(encoding)
-            break
-        except UnicodeDecodeError:
-            continue
-    else:
-        text = raw_bytes.decode("utf-8", errors="replace")
-
-    handle = io.StringIO(text, newline="")
-    sample = text[:4096]
-    handle.seek(0)
-
-    try:
-        dialect = csv.Sniffer().sniff(sample, delimiters=";,")
-        reader = csv.reader(handle, dialect=dialect)
-    except csv.Error:
-        reader = csv.reader(handle, delimiter=",")
-
-    return [row for row in reader if row]
-
-
 def main(argv: Sequence[str] | None = None) -> int:
     """CLI entrypoint."""
     parser = build_parser()
     args = parser.parse_args(list(argv) if argv is not None else sys.argv[1:])
 
     try:
-        archive_path = download_dataset(
-            source=args.source,
-            output_dir=args.output_dir,
-            cache_dir=args.cache_dir,
-            force_download=args.force_download,
-        )
-        data_path = extract_archive(archive_path, args.output_dir)
 
         # School ranking analysis for Recife
         if not args.skip_school_ranking:
             print("Analyzing Recife schools...", file=sys.stderr)
-            recife_df = load_recife_schools(data_path)
+            recife_df = load_recife_schools(args.data_path)
             print(
                 f"Loaded {len(recife_df)} student records from Recife schools",
                 file=sys.stderr,
@@ -471,7 +371,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 recife_df = calculate_overall_scores(recife_df)
 
                 # Load schools metadata and join
-                escolas_path = Path(args.output_dir) / "escolas.csv"
+                escolas_path = Path(DATA_DIR) / "escolas.csv"
                 schools_metadata_df = load_schools_metadata(escolas_path)
 
                 recife_df = recife_df.merge(
