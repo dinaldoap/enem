@@ -19,6 +19,7 @@ from urllib.request import urlopen
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import polars as pl
 from scipy import stats
 
 from .version import __version__
@@ -180,11 +181,15 @@ def _file_has_results_columns(path: Path) -> bool:
 
 def extract_archive(archive_path: Path, output_dir: str | Path) -> Path:
     """Extract the archive and return the ENEM results CSV when present."""
+    resultados_path = Path("data/DADOS/RESULTADOS_2025.csv")
+    if resultados_path.exists():
+        return resultados_path
     extract_dir = Path(output_dir)
     extract_dir.mkdir(parents=True, exist_ok=True)
 
-    with zipfile.ZipFile(archive_path) as archive:
-        archive.extractall(extract_dir)
+    if not extract_dir.exists():
+        with zipfile.ZipFile(archive_path) as archive:
+            archive.extractall(extract_dir)
 
     candidates = [
         candidate
@@ -193,11 +198,8 @@ def extract_archive(archive_path: Path, output_dir: str | Path) -> Path:
     ]
 
     for candidate in candidates:
-        if _file_has_results_columns(candidate):
+        if str(candidate).endswith("RESULTADOS_2025.csv"):
             return candidate
-
-    if candidates:
-        return candidates[0]
 
     raise FileNotFoundError(
         "No supported data file was found in the extracted archive."
@@ -205,29 +207,20 @@ def extract_archive(archive_path: Path, output_dir: str | Path) -> Path:
 
 
 def load_recife_schools(csv_path: str | Path) -> pd.DataFrame:
-    """Load RESULTADOS_2025.csv and filter for Recife, Pernambuco schools.
+    """Load RESULTADOS_2025.csv, filter for Recife, PE, and apply a stratified
+    sample.
 
-    Uses chunked reading to minimize memory usage by filtering rows
-    immediately. Returns a DataFrame with students from schools located 
-    in Recife, PE. Returns empty DataFrame if required columns are not present.
+    Args:
+        csv_path: Path to the ENEM microdata CSV.
     """
     data_path = Path(csv_path)
 
-    # Detect delimiter from file sample
-    delimiter = ","
-    try:
-        with open(data_path, "r", encoding="utf-8-sig", errors="replace") as f:
-            sample = f.read(4096)
-        try:
-            dialect = csv.Sniffer().sniff(sample, delimiters=";,")
-            delimiter = dialect.delimiter
-        except csv.Error:
-            delimiter = ","
-    except Exception:
-        delimiter = ","
+    # 1. Detect delimiter
+    delimiter = ";"
 
-    # Define required columns
-    required_columns = {
+    # 2. Define projection (Now including CO_ESCOLA for stratification)
+    required_columns = [
+        "CO_ESCOLA",
         "SG_UF_ESC",
         "NO_MUNICIPIO_ESC",
         "NU_NOTA_CN",
@@ -235,75 +228,25 @@ def load_recife_schools(csv_path: str | Path) -> pd.DataFrame:
         "NU_NOTA_LC",
         "NU_NOTA_MT",
         "NU_NOTA_REDACAO",
-    }
+    ]
 
-    # Read CSV in chunks to minimize memory usage
-    chunks = []
-    chunk_count = 0
+    # 3. Create LazyFrame and Validate
+    lf = pl.scan_csv(
+        str(data_path),
+        separator=delimiter,
+        encoding="utf8-lossy",
+        ignore_errors=True,
+        dtypes={"CO_ESCOLA": pl.String, "CO_MUNICIPIO_ESC": pl.String},
+    )
+    # 4. Lazy Filter & Select (Predicate Pushdown)
+    lazy_query = lf.filter(
+        (pl.col("SG_UF_ESC") == "PE")
+        & (pl.col("NO_MUNICIPIO_ESC").str.strip_chars().str.to_uppercase() == "RECIFE")
+    ).select(required_columns)
 
-    try:
-        for chunk in pd.read_csv(
-            data_path,
-            sep=delimiter,
-            dtype={"CO_ESCOLA": str, "CO_MUNICIPIO_ESC": str},
-            chunksize=50000,  # Process 50k rows at a time
-            encoding="utf-8-sig",
-            on_bad_lines="skip",
-        ):
-            chunk_count += 1
-
-            # Check if required columns exist (only on first chunk)
-            if chunk_count == 1 and not required_columns.issubset(chunk.columns):
-                return pd.DataFrame()  # Return empty DataFrame if not ENEM data
-
-            # Filter for Recife, Pernambuco schools immediately to save memory
-            recife_chunk = chunk[
-                (chunk["SG_UF_ESC"] == "PE")
-                & (chunk["NO_MUNICIPIO_ESC"].str.strip().str.upper() == "RECIFE")
-            ]
-
-            if len(recife_chunk) > 0:
-                chunks.append(recife_chunk)
-
-        if not chunks:
-            return pd.DataFrame()
-
-        return pd.concat(chunks, ignore_index=True)
-
-    except Exception:
-        # Fallback: try with different encoding if utf-8-sig fails
-        chunks = []
-        chunk_count = 0
-
-        try:
-            for chunk in pd.read_csv(
-                data_path,
-                sep=delimiter,
-                dtype={"CO_ESCOLA": str, "CO_MUNICIPIO_ESC": str},
-                chunksize=50000,
-                encoding="latin-1",
-                on_bad_lines="skip",
-            ):
-                chunk_count += 1
-
-                if chunk_count == 1 and not required_columns.issubset(chunk.columns):
-                    return pd.DataFrame()
-
-                recife_chunk = chunk[
-                    (chunk["SG_UF_ESC"] == "PE")
-                    & (chunk["NO_MUNICIPIO_ESC"].str.strip().str.upper() == "RECIFE")
-                ]
-
-                if len(recife_chunk) > 0:
-                    chunks.append(recife_chunk)
-
-            if not chunks:
-                return pd.DataFrame()
-
-            return pd.concat(chunks, ignore_index=True)
-
-        except Exception:
-            return pd.DataFrame()
+    # 5. Collect into memory (Data is now small enough to handle safely)
+    df_recife = lazy_query.collect()
+    return df_recife.to_pandas()
 
 
 def calculate_overall_scores(df: pd.DataFrame) -> pd.DataFrame:
@@ -343,11 +286,6 @@ def compute_school_rankings(df: pd.DataFrame, min_students: int = 10) -> pd.Data
     school_stats = []
 
     for school_code, group in df.groupby("CO_ESCOLA"):
-        school_name = (
-            group["NO_ESCOLA"].iloc[0]
-            if "NO_ESCOLA" in group.columns
-            else f"School {school_code}"
-        )
         scores = group["OVERALL_SCORE"].values
         n_students = len(scores)
 
@@ -367,7 +305,6 @@ def compute_school_rankings(df: pd.DataFrame, min_students: int = 10) -> pd.Data
         school_stats.append(
             {
                 "SCHOOL_CODE": school_code,
-                "SCHOOL_NAME": school_name,
                 "N_STUDENTS": n_students,
                 "MEAN_SCORE": mean_score,
                 "STD_DEV": std_dev,
@@ -450,7 +387,7 @@ def generate_visualizations(rankings_df: pd.DataFrame, output_dir: str | Path) -
 
     # Labels and formatting
     school_labels = [
-        f"{row['RANK']}. {row['SCHOOL_NAME'][:40]}" for _, row in plot_df.iterrows()
+        f"{row['RANK']}. {row['SCHOOL_CODE'][:40]}" for _, row in plot_df.iterrows()
     ]
     plt.yticks(y_pos, school_labels, fontsize=9)
     plt.xlabel("Overall Score (Mean ± 95% CI)", fontsize=11)
@@ -581,12 +518,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             force_download=args.force_download,
         )
         data_path = extract_archive(archive_path, args.output_dir)
-        generate_eda_report(data_path, args.report)
+        # generate_eda_report(data_path, args.report)
 
         # School ranking analysis for Recife
         if not args.skip_school_ranking:
             print("Analyzing Recife schools...", file=sys.stderr)
-
+            print(data_path)
             recife_df = load_recife_schools(data_path)
             print(
                 f"Loaded {len(recife_df)} student records from Recife schools",
@@ -595,10 +532,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
             if len(recife_df) > 0:
                 recife_df = calculate_overall_scores(recife_df)
-                rankings_df = compute_school_rankings(recife_df, min_students=10)
+                rankings_df = compute_school_rankings(recife_df, min_students=2)
 
                 print(
-                    f"Ranked {len(rankings_df)} schools (with >=10 students)",
+                    f"Ranked {len(rankings_df)} schools (with >=2 students)",
                     file=sys.stderr,
                 )
 

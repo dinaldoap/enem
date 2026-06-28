@@ -306,3 +306,7 @@ data/PROVAS E GABARITOS/ENEM_2025_P2_GAB_11_DIA_2_LARANJA_ATENDIMENTO_ESPECIALIZ
 data/PROVAS E GABARITOS/ENEM_2025_P2_GAB_11_DIA_2_LARANJA_LEDOR.pdf
 data/PROVAS E GABARITOS/ENEM_2025_P2_GAB_11_DIA_2_LARANJA_SUPERAMPLIADA.pdf
 eda_report.txt
+analysis_output/bar_chart.png
+analysis_output/forest_plot.png
+analysis_output/recife_school_rankings.csv
+escolas.csv

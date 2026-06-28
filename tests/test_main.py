@@ -77,25 +77,25 @@ def test_main_uses_results_csv_when_archive_contains_multiple_data_files(tmp_pat
 
     results_path = tmp_path / "results.csv"
     rows = [
-        "CO_ESCOLA,NO_ESCOLA,SG_UF_ESC,NO_MUNICIPIO_ESC,NU_NOTA_CN,NU_NOTA_CH,NU_NOTA_LC,NU_NOTA_MT,NU_NOTA_REDACAO"
+        "CO_ESCOLA,SG_UF_ESC,NO_MUNICIPIO_ESC,NU_NOTA_CN,NU_NOTA_CH,NU_NOTA_LC,NU_NOTA_MT,NU_NOTA_REDACAO"
     ]
     rows.extend(
-        f"{school_code},Escola {name},PE,RECIFE,700,680,690,710,720"
-        for school_code, name in [
-            (1001, "A"),
-            (1001, "A"),
-            (1001, "A"),
-            (1001, "A"),
-            (1001, "A"),
-            (1001, "A"),
-            (1001, "A"),
-            (1001, "A"),
-            (1001, "A"),
-            (1001, "A"),
+        f"{school_code},PE,RECIFE,700,680,690,710,720"
+        for school_code in [
+            (1001),
+            (1001),
+            (1001),
+            (1001),
+            (1001),
+            (1001),
+            (1001),
+            (1001),
+            (1001),
+            (1001),
         ]
     )
-    rows.append("1002,Escola B,PE,OLINDA,600,620,610,650,640")
-    rows.append("1003,Escola C,PE,RECIFE,690,700,710,720,730")
+    rows.append("1002,PE,OLINDA,600,620,610,650,640")
+    rows.append("1003,PE,RECIFE,690,700,710,720,730")
     results_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
 
     archive_path = tmp_path / "multi_data.zip"
